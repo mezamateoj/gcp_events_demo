@@ -1,62 +1,53 @@
-import { NodeSDK } from '@opentelemetry/sdk-node';
-import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
-import { TraceExporter } from '@google-cloud/opentelemetry-cloud-trace-exporter';
+import { NodeSDK } from "@opentelemetry/sdk-node";
+import { getNodeAutoInstrumentations } from "@opentelemetry/auto-instrumentations-node";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
+import { ConsoleSpanExporter } from "@opentelemetry/sdk-trace-node";
+import { resourceFromAttributes } from "@opentelemetry/resources";
+import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
 let sdk = null;
-/**
- * Initialize OpenTelemetry tracing with GCP Cloud Trace exporter.
- * This should be called once at application startup, before any other imports.
- *
- * @example
- * ```typescript
- * import { initTracing } from '@lidz/tracer';
- *
- * initTracing({
- *   projectId: 'my-gcp-project',
- *   serviceName: 'my-api'
- * });
- * ```
- */
+// this did not work
+// we need to preload the OpenTelemetry configuration
+// see src/instrumentation.ts for working solution
 export function initTracing(config) {
     if (!config.enabled && config.enabled !== undefined) {
-        console.log('Tracing is disabled');
-        return;
-    }
-    if (!config.projectId) {
-        console.warn('OpenTelemetry: No projectId configured. Tracing disabled.');
+        console.log("Tracing is disabled");
         return;
     }
     if (sdk) {
-        console.warn('OpenTelemetry SDK already initialized');
+        console.warn("OpenTelemetry SDK already initialized");
         return;
     }
+    if (config.debug) {
+        diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
+    }
+    const isProduction = process.env.NODE_ENV === "production";
+    const traceExporter = isProduction
+        ? new OTLPTraceExporter({
+            url: "https://telemetry.googleapis.com/v1/traces",
+        })
+        : new ConsoleSpanExporter();
     sdk = new NodeSDK({
-        serviceName: config.serviceName || 'unknown-service',
-        traceExporter: new TraceExporter({
-            projectId: config.projectId,
+        resource: resourceFromAttributes({
+            [ATTR_SERVICE_NAME]: config.serviceName || "unknown-service",
         }),
+        traceExporter,
         instrumentations: [
             getNodeAutoInstrumentations({
-                // Automatically instrument Koa and other frameworks
-                '@opentelemetry/instrumentation-http': {
-                    enabled: true,
-                },
+                "@opentelemetry/instrumentation-http": { enabled: true },
+                "@opentelemetry/instrumentation-fs": { enabled: false },
             }),
         ],
     });
     sdk.start();
-    console.log('OpenTelemetry tracing initialized for project:', config.projectId);
-    // Gracefully shut down on process exit
-    process.on('SIGTERM', () => {
+    console.log(`OpenTelemetry tracing initialized (${isProduction ? "OTLP" : "Console"} exporter)`);
+    process.on("SIGTERM", () => {
         sdk
             ?.shutdown()
-            .then(() => console.log('OpenTelemetry SDK shut down successfully'))
-            .catch((error) => console.error('Error shutting down OpenTelemetry SDK', error));
+            .then(() => console.log("OpenTelemetry SDK shut down"))
+            .catch((error) => console.error("Error shutting down OpenTelemetry SDK", error));
     });
 }
-/**
- * Manually shutdown the OpenTelemetry SDK.
- * Useful for testing or graceful shutdowns.
- */
 export async function shutdownTracing() {
     if (sdk) {
         await sdk.shutdown();

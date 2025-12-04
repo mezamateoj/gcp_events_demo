@@ -1,23 +1,19 @@
 FROM node:20-alpine
 
-# Create app directory
 WORKDIR /usr/src/app
 
-# Copy package.json and package-lock.json
 COPY package*.json ./
 
-# Install dependencies
 RUN npm install
 
-# Copy the rest of the app files
 COPY . .
 
-# Compile TypeScript
 RUN npm run build
 
-# Expose port
+ENV NODE_ENV=production
+
 EXPOSE 8080
 
-
-# Run the built app
-CMD ["node", "--experimental-specifier-resolution=node", "dist/index.js"]
+# load instrumentation BEFORE app code
+# https://docs.cloud.google.com/trace/docs/setup/nodejs-ot#config-preload
+CMD ["node", "--experimental-specifier-resolution=node", "--require", "./dist/instrumentation.js", "dist/index.js"]
